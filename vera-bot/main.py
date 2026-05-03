@@ -11,15 +11,30 @@ load_dotenv()
 app = FastAPI()
 
 # Configure Gemini
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+api_key = os.getenv("GEMINI_API_KEY")
+if not api_key:
+    print("⚠ WARNING: GEMINI_API_KEY not set. Bot will fail on /v1/reply calls.")
+else:
+    genai.configure(api_key=api_key)
+    print("✓ Gemini API configured")
+
 # Use gemini-1.0-pro (more widely available) or gemini-pro
+model = None
 try:
     model = genai.GenerativeModel("gemini-2.0-flash")
-except:
+    print("✓ Using gemini-2.0-flash")
+except Exception as e:
+    print(f"⚠ gemini-2.0-flash failed: {e}")
     try:
         model = genai.GenerativeModel("gemini-1.0-pro")
-    except:
-        model = genai.GenerativeModel("gemini-pro")
+        print("✓ Using gemini-1.0-pro")
+    except Exception as e:
+        print(f"⚠ gemini-1.0-pro failed: {e}")
+        try:
+            model = genai.GenerativeModel("gemini-pro")
+            print("✓ Using gemini-pro")
+        except Exception as e:
+            print(f"✗ All models failed: {e}")
 
 # Path to dataset (adjust if needed)
 if os.path.exists("../magicpin-ai-challenge/dataset"):
@@ -51,21 +66,26 @@ try:
         triggers_data = {t["id"]: t for t in triggers_seed.get("triggers", [])}
     
     # Load category files
-    import os
     categories_dir = f"{EXPANDED_DIR}/categories"
-    for category_file in os.listdir(categories_dir):
-        if category_file.endswith(".json"):
-            with open(os.path.join(categories_dir, category_file)) as f:
-                cat_data = json.load(f)
-                category_slug = category_file.replace(".json", "")
-                categories_data[category_slug] = cat_data
+    if os.path.exists(categories_dir):
+        for category_file in os.listdir(categories_dir):
+            if category_file.endswith(".json"):
+                with open(os.path.join(categories_dir, category_file)) as f:
+                    cat_data = json.load(f)
+                    category_slug = category_file.replace(".json", "")
+                    categories_data[category_slug] = cat_data
     
     print("✓ All data loaded successfully")
     print(f"  Merchants: {len(merchants_data)}")
     print(f"  Categories: {len(categories_data)}")
     print(f"  Triggers: {len(triggers_data)}")
+except FileNotFoundError as e:
+    print(f"⚠ Data files not found (expected on deployment): {e}")
+    print("  Judge will populate via /v1/context endpoint")
 except Exception as e:
-    print(f"⚠ Error loading data: {e}")
+    print(f"✗ Error loading data: {e}")
+    import traceback
+    traceback.print_exc()
 
 
 # ============= ENDPOINTS =============
