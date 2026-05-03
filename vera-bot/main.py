@@ -22,7 +22,15 @@ except:
         model = genai.GenerativeModel("gemini-pro")
 
 # Path to dataset (adjust if needed)
-EXPANDED_DIR = "../magicpin-ai-challenge/dataset"
+
+ 
+ # Use absolute path or fallback
+ if os.path.exists("../magicpin-ai-challenge/dataset"):
+     EXPANDED_DIR = "../magicpin-ai-challenge/dataset"
+ elif os.path.exists("../../magicpin-ai-challenge/dataset"):
+     EXPANDED_DIR = "../../magicpin-ai-challenge/dataset"
+ else:
+     EXPANDED_DIR = "./dataset"  # Fallback if running standalone
 
 # In-memory storage
 contexts = {"category": {}, "merchant": {}, "customer": {}, "trigger": {}}
