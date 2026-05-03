@@ -1,6 +1,6 @@
 # Vera AI Challenge Bot
 
-A conversational AI assistant that composes high-specificity business messages for merchants using Google Gemini API.
+A conversational AI assistant that composes high-specificity business messages for merchants using Google Gemini API or OpenAI API or any other API Key(you have to set up the api and configure the compatibility as of right now this one runs with OpenAI).
 
 ## Overview
 
