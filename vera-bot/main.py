@@ -3,38 +3,21 @@ from typing import Optional, List, Dict, Any
 import json
 import os
 from datetime import datetime
-import google.generativeai as genai
+from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
 
 app = FastAPI()
 
-# Configure Gemini
-api_key = os.getenv("GEMINI_API_KEY")
+# Configure OpenAI
+api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
-    print("⚠ WARNING: GEMINI_API_KEY not set. Bot will fail on /v1/reply calls.")
+    print("⚠ WARNING: OPENAI_API_KEY not set. Bot will fail on /v1/reply calls.")
+    client = None
 else:
-    genai.configure(api_key=api_key)
-    print("✓ Gemini API configured")
-
-# Use gemini-1.0-pro (more widely available) or gemini-pro
-model = None
-try:
-    model = genai.GenerativeModel("gemini-2.0-flash")
-    print("✓ Using gemini-2.0-flash")
-except Exception as e:
-    print(f"⚠ gemini-2.0-flash failed: {e}")
-    try:
-        model = genai.GenerativeModel("gemini-1.0-pro")
-        print("✓ Using gemini-1.0-pro")
-    except Exception as e:
-        print(f"⚠ gemini-1.0-pro failed: {e}")
-        try:
-            model = genai.GenerativeModel("gemini-pro")
-            print("✓ Using gemini-pro")
-        except Exception as e:
-            print(f"✗ All models failed: {e}")
+    client = OpenAI(api_key=api_key)
+    print("✓ OpenAI API configured")
 
 # Path to dataset (adjust if needed)
 if os.path.exists("../magicpin-ai-challenge/dataset"):
@@ -106,11 +89,10 @@ async def health():
 
 @app.get("/v1/metadata")
 async def metadata():
-    model_name = model._client_config.model or "gemini-1.0-pro"
     return {
         "team_name": "Vera",
         "team_members": ["Abhishek"],
-        "model": "gemini-2.0-flash" if "2.0" in str(model_name) else "gemini-1.0-pro",
+        "model": "gpt-3.5-turbo",
         "approach": "Signal ranker + grounded composer + reply handler",
         "version": "1.0.0"
     }
