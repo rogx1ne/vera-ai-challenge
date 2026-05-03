@@ -192,111 +192,163 @@ async def tick(data: Dict[str, Any]):
 
 @app.post("/v1/reply")
 async def reply(data: Dict[str, Any]):
-    """Handle merchant replies"""
-    message = data.get("message", "")
+    """Handle merchant replies with smarter intent classification"""
+    message = data.get("message", "").lower().strip()
     conv_id = data.get("conversation_id")
     
-    # Simple intent classification
-    if any(word in message.lower() for word in ["yes", "ok", "sure", "go", "send", "sounds good"]):
+    # Enhanced intent classification with weights
+    positive_indicators = {
+        "yes": 3, "yeah": 3, "yep": 3, "ok": 2, "okay": 2, "sure": 3,
+        "absolutely": 3, "definitely": 3, "go": 2, "send": 3, "sounds good": 3,
+        "let's do it": 3, "perfect": 2, "great": 2, "interested": 2,
+        "looks good": 2, "count me in": 3, "in": 2, "cool": 1,
+    }
+    
+    negative_indicators = {
+        "no": 3, "nope": 3, "nah": 2, "not": 2, "don't": 2, "stop": 3,
+        "later": 1, "busy": 1, "not now": 2, "can't": 2, "not interested": 3,
+        "not today": 1, "skip": 2, "pass": 2, "maybe next time": 1,
+    }
+    
+    positive_score = sum(positive_indicators.get(word, 0) for word in positive_indicators if word in message)
+    negative_score = sum(negative_indicators.get(word, 0) for word in negative_indicators if word in message)
+    
+    # Log the decision
+    log_entry = {
+        "conversation_id": conv_id,
+        "message": message[:100],
+        "positive_score": positive_score,
+        "negative_score": negative_score,
+        "timestamp": datetime.now().isoformat()
+    }
+    
+    if positive_score > negative_score and positive_score > 0:
+        log_entry["decision"] = "accept"
         return {
             "action": "send",
-            "body": "Perfect! I'm preparing that now. Check your dashboard in a minute.",
-            "rationale": "Merchant accepted"
+            "body": "Excellent! I'm setting this up now. You'll see results in your dashboard within 2 hours.",
+            "rationale": "High intent signal detected",
+            "confidence": min(0.95, 0.5 + positive_score * 0.15),
+            "reason_code": "explicit_accept"
         }
-    elif any(word in message.lower() for word in ["no", "not", "don't", "stop", "later", "busy"]):
+    elif negative_score > positive_score and negative_score > 0:
+        log_entry["decision"] = "decline"
         return {
             "action": "end",
-            "body": "Got it. I'll check in another time.",
-            "rationale": "Merchant declined"
+            "body": "No problem! I'll check back with you later. Reach out if plans change.",
+            "rationale": "Merchant declined opportunity",
+            "confidence": min(0.95, 0.5 + negative_score * 0.15),
+            "reason_code": "explicit_decline"
         }
     else:
+        log_entry["decision"] = "clarify"
         return {
             "action": "send",
-            "body": "Glad you're interested! The data shows local demand for your services. Should we run a campaign?",
-            "rationale": "Merchant has questions or is unclear"
+            "body": "Sounds like you want to learn more! What specific aspect interests you most—customer acquisition, retention, or seasonal demand?",
+            "rationale": "Unclear intent; needs clarification",
+            "confidence": 0.4,
+            "reason_code": "unclear_intent"
         }
 
 
 # ============= HELPER FUNCTIONS =============
 
 def compose_message(merchant_id: str, trigger_id: str) -> str:
-    """Compose category-specific, grounded messages"""
+    """Compose category-specific, grounded messages with robust error handling"""
     
-    # Get merchant and trigger data
-    merchant = merchants_data.get(merchant_id, {})
-    trigger = triggers_data.get(trigger_id, {})
-    
-    merchant_name = merchant.get("identity", {}).get("name", merchant_id)
-    category_slug = merchant.get("category_slug", "general")
-    trigger_kind = trigger.get("kind", "opportunity")
-    payload = trigger.get("payload", {})
-    
-    # Extract conversation history insights
-    conv_history = merchant.get("conversation_history", [])
-    last_engagement = None
-    if conv_history:
-        last_engagement = conv_history[-1].get("engagement")
-    
-    # Personalization based on engagement
-    personalization = ""
-    if last_engagement == "intent_action":
-        personalization = "You've shown interest before. "
-    elif last_engagement == "positive_feedback":
-        personalization = "Great to reconnect. "
-    
-    # Category-specific tone and focus
-    category_tone = {
-        "dentists": {"focus": "health and compliance", "urgency_word": "important", "metric": "patient appointments", "fallback": "Your dental practice's growth is our priority."},
-        "gyms": {"focus": "member retention and goals", "urgency_word": "momentum", "metric": "active members", "fallback": "Keep your members engaged and motivated."},
-        "pharmacies": {"focus": "convenience and accessibility", "urgency_word": "critical", "metric": "prescription fills", "fallback": "Your accessibility matters to customers."},
-        "restaurants": {"focus": "taste and experience", "urgency_word": "trending", "metric": "covers per night", "fallback": "Your culinary reputation is your strength."},
-        "salons": {"focus": "beauty and confidence", "urgency_word": "popular", "metric": "bookings", "fallback": "Your style and expertise attract clients."},
-    }
-    
-    tone = category_tone.get(category_slug, {"focus": "growth", "urgency_word": "opportunity", "metric": "engagement", "fallback": "Your business growth matters to us."})
-    
-    # Category-aware templates
-    templates = {
-        "research_digest": lambda: f"{personalization}We see local {tone['focus']} interest in {payload.get('category', 'your service')} this week—very {tone['urgency_word']}. Your '{merchant.get('offers', [{}])[0].get('title', 'offer')}' is ready. Shall we?",
+    try:
+        # Get merchant and trigger data
+        merchant = merchants_data.get(merchant_id, {})
+        trigger = triggers_data.get(trigger_id, {})
         
-        "perf_dip": lambda: f"{personalization}Your {tone['metric']} dropped {abs(payload.get('delta_pct', 0)*100):.0f}% this week. This {tone['urgency_word']} to reverse. Ready to launch a campaign?",
+        if not merchant or not trigger:
+            return f"We have an exciting opportunity for you! Ready to learn more?"
         
-        "renewal_due": lambda: f"{personalization}Your plan renews in {payload.get('days_remaining', 0)} days (₹{payload.get('renewal_amount', 0)}). Keep the {tone['focus']} going. Shall we renew?",
+        merchant_name = merchant.get("identity", {}).get("name", merchant_id)
+        category_slug = merchant.get("category_slug", "general")
+        trigger_kind = trigger.get("kind", "opportunity")
+        payload = trigger.get("payload", {}) or {}
         
-        "review_theme_emerged": lambda: f"We see {payload.get('occurrences_30d', 0)} reviews mentioning '{payload.get('theme', 'feedback')}' in 30 days. {personalization}Let's address this together?",
+        # Extract conversation history insights
+        conv_history = merchant.get("conversation_history", [])
+        last_engagement = None
+        if conv_history and isinstance(conv_history, list) and len(conv_history) > 0:
+            last_engagement = conv_history[-1].get("engagement") if isinstance(conv_history[-1], dict) else None
         
-        "festival_upcoming": lambda: f"An {tone['urgency_word']} {tone['focus']} opportunity: {payload.get('festival', 'an event')} is coming. {personalization}Ready to capitalize?",
+        # Personalization based on engagement
+        personalization = ""
+        if last_engagement == "intent_action":
+            personalization = "You've shown interest before. "
+        elif last_engagement == "positive_feedback":
+            personalization = "Great to reconnect. "
         
-        "winback_eligible": lambda: f"Your {tone['focus']} community misses you! {payload.get('lapsed_customers_added_since_expiry', 0)} people want to come back. {personalization}Let's reconnect?",
+        # Category-specific tone and focus
+        category_tone = {
+            "dentists": {"focus": "health and compliance", "urgency_word": "important", "metric": "patient appointments", "fallback": "Your dental practice's growth is our priority."},
+            "gyms": {"focus": "member retention and goals", "urgency_word": "momentum", "metric": "active members", "fallback": "Keep your members engaged and motivated."},
+            "pharmacies": {"focus": "convenience and accessibility", "urgency_word": "critical", "metric": "prescription fills", "fallback": "Your accessibility matters to customers."},
+            "restaurants": {"focus": "taste and experience", "urgency_word": "trending", "metric": "covers per night", "fallback": "Your culinary reputation is your strength."},
+            "salons": {"focus": "beauty and confidence", "urgency_word": "popular", "metric": "bookings", "fallback": "Your style and expertise attract clients."},
+            # Expanded categories
+            "beauty_spas": {"focus": "relaxation and wellness", "urgency_word": "refreshing", "metric": "spa appointments", "fallback": "Your wellness services enhance customer wellbeing."},
+            "fitness": {"focus": "fitness goals and transformation", "urgency_word": "crucial", "metric": "active members", "fallback": "Help members achieve their fitness goals."},
+            "healthcare": {"focus": "patient wellbeing", "urgency_word": "essential", "metric": "patient visits", "fallback": "Your healthcare services matter to your community."},
+            "food_delivery": {"focus": "delivery speed and satisfaction", "urgency_word": "immediate", "metric": "orders per hour", "fallback": "Quick delivery builds customer loyalty."},
+            "fashion": {"focus": "style and trends", "urgency_word": "fashionable", "metric": "sales", "fallback": "Your fashion sense attracts style-conscious customers."},
+            "education": {"focus": "student success", "urgency_word": "vital", "metric": "enrollments", "fallback": "Quality education drives student outcomes."},
+            "automotive": {"focus": "vehicle maintenance and care", "urgency_word": "critical", "metric": "service bookings", "fallback": "Regular maintenance keeps vehicles running smoothly."},
+        }
         
-        "curious_ask_due": lambda: f"What's working best for {tone['focus']} this week? I'd love to know so we can help.",
+        tone = category_tone.get(category_slug, {"focus": "growth", "urgency_word": "opportunity", "metric": "engagement", "fallback": "Your business growth matters to us."})
         
-        "recall_due": lambda: f"One of your customers is due for a {payload.get('service_due', 'service')}. Time to reach out and bring them back?",
+        # Category-aware templates with safe attribute access
+        templates = {
+            "research_digest": lambda: f"{personalization}We see local {tone['focus']} interest in {payload.get('category', 'your service')} this week—very {tone['urgency_word']}. Your '{merchant.get('offers', [{}])[0].get('title', 'offer') if merchant.get('offers') else 'offer'}' is ready. Shall we?",
+            
+            "perf_dip": lambda: f"{personalization}Your {tone['metric']} dropped {abs(float(payload.get('delta_pct', 0))*100):.0f}% this week. This {tone['urgency_word']} to reverse. Ready to launch a campaign?",
+            
+            "renewal_due": lambda: f"{personalization}Your plan renews in {payload.get('days_remaining', 0)} days (₹{payload.get('renewal_amount', 0)}). Keep the {tone['focus']} going. Shall we renew?",
+            
+            "review_theme_emerged": lambda: f"We see {payload.get('occurrences_30d', 0)} reviews mentioning '{payload.get('theme', 'feedback')}' in 30 days. {personalization}Let's address this together?",
+            
+            "festival_upcoming": lambda: f"An {tone['urgency_word']} {tone['focus']} opportunity: {payload.get('festival', 'an event')} is coming. {personalization}Ready to capitalize?",
+            
+            "winback_eligible": lambda: f"Your {tone['focus']} community misses you! {payload.get('lapsed_customers_added_since_expiry', 0)} people want to come back. {personalization}Let's reconnect?",
+            
+            "curious_ask_due": lambda: f"What's working best for {tone['focus']} this week? I'd love to know so we can help.",
+            
+            "recall_due": lambda: f"One of your customers is due for a {payload.get('service_due', 'service')}. Time to reach out and bring them back?",
+            
+            "ipl_match_today": lambda: f"{payload.get('match', 'Big event')} today in {payload.get('venue', 'your area')}—{tone['urgency_word']} for {tone['focus']}. {personalization}Ready to attract the crowd?",
+        }
         
-        "ipl_match_today": lambda: f"{payload.get('match', 'Big event')} today in {payload.get('venue', 'your area')}—{tone['urgency_word']} for {tone['focus']}. {personalization}Ready to attract the crowd?",
+        # Try to get template for this trigger type
+        if trigger_kind in templates:
+            try:
+                msg = templates[trigger_kind]()
+                if msg and len(msg) > 10:  # Ensure not empty
+                    return msg
+            except Exception as e:
+                print(f"⚠ Template error for {trigger_kind}: {e}")
+                pass  # Fall through to fallback
         
-        "perf_dip": lambda: f"{personalization}Your {tone['metric']} dropped {abs(payload.get('delta_pct', 0)*100):.0f}% this week—this is {tone['urgency_word']}. Should we launch a recovery push?",
-    }
-    
-    # Try to get template for this trigger type
-    if trigger_kind in templates:
-        try:
-            msg = templates[trigger_kind]()
-            if msg and len(msg) > 10:  # Ensure not empty
-                return msg
-        except Exception as e:
-            print(f"Template error for {trigger_kind}: {e}")
-    
-    # Smart fallback based on category and available data
-    offers_list = merchant.get("offers", [])
-    active_offer = next((o for o in offers_list if o.get("status") == "active"), None)
-    
-    if active_offer:
-        offer_text = f"Your '{active_offer.get('title')}' offer"
-        return f"{personalization}{offer_text} has {tone['urgency_word']} {tone['focus']} potential. Ready to promote it?"
-    else:
+        # Smart fallback based on category and available data
+        offers_list = merchant.get("offers", [])
+        if isinstance(offers_list, list) and len(offers_list) > 0:
+            active_offer = next((o for o in offers_list if isinstance(o, dict) and o.get("status") == "active"), None)
+            if active_offer:
+                offer_text = f"Your '{active_offer.get('title')}' offer"
+                return f"{personalization}{offer_text} has {tone['urgency_word']} {tone['focus']} potential. Ready to promote it?"
+        
         # Ultimate fallback: use category-specific phrase
         return f"{personalization}{tone['fallback']} Should we explore new opportunities together?"
+        
+    except Exception as e:
+        # Last-resort fallback
+        print(f"✗ Error in compose_message({merchant_id}, {trigger_id}): {e}")
+        import traceback
+        traceback.print_exc()
+        return "We have an exciting opportunity for your business. Would you like to hear more?"
 
 
 if __name__ == "__main__":
